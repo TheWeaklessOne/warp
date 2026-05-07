@@ -113,6 +113,7 @@ use crate::ai::blocklist::agent_view::{
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::blocklist::handoff::{HandoffLaunchAttachments, PendingCloudLaunch};
 use crate::ai::blocklist::{AttachmentType, PendingAttachment};
+use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::server::server_api::ai::{AttachmentFileInfo, AttachmentInput};
 use crate::terminal::view::ambient_agent::{
@@ -3852,7 +3853,7 @@ impl Input {
             return true;
         }
 
-        if crate::ai::cloud_environments::CloudAmbientAgentEnvironment::get_all(ctx).is_empty() {
+        if CloudAmbientAgentEnvironment::get_all(ctx).is_empty() {
             ctx.emit(Event::OpenHandoffEnvironmentCreationModal);
             return true;
         }

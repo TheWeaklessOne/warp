@@ -11,9 +11,8 @@ use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{ActionButton, SecondaryTheme};
 use pathfinder_color::ColorU;
 use warpui::elements::{
-    Align, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
-    CrossAxisAlignment, Dismiss, Element, Empty, Flex, MouseStateHandle, ParentElement,
-    ScrollbarWidth,
+    Align, ChildView, ClippedScrollStateHandle, ClippedScrollable, CrossAxisAlignment, Dismiss,
+    Element, Empty, Flex, MouseStateHandle, ParentElement, ScrollbarWidth,
 };
 use warpui::ui_components::components::UiComponent;
 use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
@@ -21,13 +20,13 @@ use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewCon
 use crate::ui_components::buttons::icon_button;
 
 const DIALOG_WIDTH: f32 = 600.;
-const FORM_MAX_HEIGHT: f32 = 520.;
 const FORM_PADDING: f32 = 8.;
 
 #[derive(Debug, Clone)]
 pub(crate) enum HandoffEnvironmentCreationModalEvent {
     Created { env_id: SyncId },
     Cancelled,
+    CreationFailed { error_message: String },
 }
 
 #[derive(Debug, Clone)]
@@ -112,18 +111,29 @@ impl HandoffEnvironmentCreationModal {
                 };
 
                 let client_id = ClientId::default();
-                UpdateManager::handle(ctx).update(ctx, |update_manager, ctx| {
-                    update_manager.create_ambient_agent_environment(
-                        environment.clone(),
-                        client_id,
-                        owner,
-                        ctx,
-                    );
-                });
+                let create_future =
+                    UpdateManager::handle(ctx).update(ctx, |update_manager, ctx| {
+                        update_manager.create_ambient_agent_environment_online(
+                            environment.clone(),
+                            client_id,
+                            owner,
+                            ctx,
+                        )
+                    });
 
-                let env_id = SyncId::ClientId(client_id);
                 self.hide(ctx);
-                ctx.emit(HandoffEnvironmentCreationModalEvent::Created { env_id });
+                ctx.spawn(create_future, |_me, result, ctx| match result {
+                    Ok(server_id) => {
+                        let env_id = SyncId::ServerId(server_id);
+                        ctx.emit(HandoffEnvironmentCreationModalEvent::Created { env_id });
+                    }
+                    Err(err) => {
+                        log::error!("Failed to create environment for handoff: {err:#}");
+                        ctx.emit(HandoffEnvironmentCreationModalEvent::CreationFailed {
+                            error_message: err.to_string(),
+                        });
+                    }
+                });
             }
             UpdateEnvironmentFormEvent::Cancelled => {
                 self.hide(ctx);
@@ -164,11 +174,7 @@ impl HandoffEnvironmentCreationModal {
         )
         .finish();
 
-        let constrained_form = ConstrainedBox::new(scrollable_form)
-            .with_max_height(FORM_MAX_HEIGHT)
-            .finish();
-
-        let padded_form = warpui::elements::Container::new(constrained_form)
+        let padded_form = warpui::elements::Container::new(scrollable_form)
             .with_uniform_padding(FORM_PADDING)
             .finish();
 

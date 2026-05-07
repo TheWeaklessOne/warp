@@ -50,10 +50,11 @@ A thin modal wrapper around `UpdateEnvironmentForm`, following the `AgentAssiste
 enum HandoffEnvironmentCreationModalEvent {
     Created { env_id: SyncId },
     Cancelled,
+    CreationFailed { error_message: String },
 }
 ```
 
-The `Created` event carries the `SyncId` of the newly created environment (computed from the `ClientId` used in `UpdateManager::create_ambient_agent_environment`). The modal handles environment creation internally — the caller only sees the resulting `SyncId`.
+The `Created` event carries a `SyncId::ServerId` — guaranteed to be a server-recognized ID. The modal uses `create_ambient_agent_environment_online` (an inline server call with built-in retries) so the `ServerId` is available before the event is emitted, eliminating any `ClientId` → `ServerId` sync race. On failure, `CreationFailed` is emitted with the error message so the workspace can show a toast.
 
 **Form configuration** (matching `FirstTimeCloudAgentSetupView`):
 - `show_header = false` → submit button renders at bottom-right of form body
@@ -64,13 +65,16 @@ The `Created` event carries the `SyncId` of the newly created environment (compu
 - On `UpdateEnvironmentFormEvent::Created { environment, share_with_team }`:
   1. Resolve owner via `cloud_environments::owner_for_new_environment()` / `owner_for_new_personal_environment()`
   2. Generate `ClientId::default()`
-  3. Call `UpdateManager::create_ambient_agent_environment()`
-  4. Emit `HandoffEnvironmentCreationModalEvent::Created { env_id: SyncId::ClientId(client_id) }`
-  5. The environment is immediately available in `CloudModel` after this call
+  3. Call `UpdateManager::create_ambient_agent_environment_online()` — returns `Future<Result<ServerId>>`
+  4. Hide the modal immediately
+  5. `ctx.spawn` the future:
+     - On `Ok(server_id)`: emit `Created { env_id: SyncId::ServerId(server_id) }`
+     - On `Err(err)`: log the error and emit `CreationFailed { error_message }`
 
 **Rendering** (following `AgentAssistedEnvironmentModal`):
 - When `visible == false`, render `Empty`
-- When visible: `Dialog::new("Create environment", None, dialog_styles(appearance)).with_close_button(...).with_child(scrollable_form).with_width(MODAL_WIDTH).build()` → `Dismiss::new().prevent_interaction_with_other_elements().on_dismiss(cancel)` → `Container` with dark overlay background + window corner radius
+- When visible: `Dialog::new("Create environment", None, dialog_styles(appearance)).with_close_button(...).with_child(scrollable_form).with_width(DIALOG_WIDTH).build()` → `Dismiss::new().prevent_interaction_with_other_elements().on_dismiss(cancel)` → `Container` with dark overlay background + window corner radius
+- The form content has no fixed max height — the dialog sizes to its content, with a `ClippedScrollable` safety net for very small windows
 
 ### 2. Input: intercept Enter when no environments exist
 
@@ -101,25 +105,31 @@ The prompt and attachments stay in the input buffer — the user will see them u
 
 In `workspace/view.rs`:
 
-**New field** on `WorkspaceViewState` (or `Workspace`):
+**New field** on `Workspace`:
 ```rust
-handoff_environment_creation_modal: ViewHandle<HandoffEnvironmentCreationModal>,
+handoff_environment_creation_modal: Option<ViewHandle<HandoffEnvironmentCreationModal>>,
 ```
 
-**Subscribe to modal events** during workspace construction:
+The modal is created on-demand (not pre-constructed at workspace init) to avoid unnecessary overhead. It is stored as `Option<ViewHandle>` and rendered as a `ChildView` in the workspace's `render()` method when `Some`, following the same pattern as `lightbox_view`.
+
+**Subscribe to modal events** when the modal is created in `show_handoff_environment_creation_modal`:
 - `HandoffEnvironmentCreationModalEvent::Created { env_id }` →
-  1. Hide the modal
+  1. Set `handoff_environment_creation_modal = None`
   2. Get the active terminal view's input and read the prompt + attachments from its `&` compose state
   3. Use the input's `collect_cloud_launch_attachments()` and `editor.buffer_text()` to build a `PendingCloudLaunch`
   4. Clear the input buffer and exit `&` compose mode
   5. Dispatch `WorkspaceAction::OpenLocalToCloudHandoffPane { launch, explicit_environment_id: Some(env_id) }`
 - `HandoffEnvironmentCreationModalEvent::Cancelled` →
-  1. Hide the modal
+  1. Set `handoff_environment_creation_modal = None`
   2. Re-focus the active terminal input (the `&` compose state and prompt are already preserved)
+- `HandoffEnvironmentCreationModalEvent::CreationFailed { error_message }` →
+  1. Set `handoff_environment_creation_modal = None`
+  2. Show an error toast: "Failed to create environment: \<error_message\>"
+  3. Re-focus the active terminal input
 
-**New workspace action** `ShowHandoffEnvironmentCreationModal` — shows the modal. The terminal view subscribes to `Input::Event::OpenHandoffEnvironmentCreationModal` and dispatches this action.
+**New workspace action** `ShowHandoffEnvironmentCreationModal` — creates the modal on-demand, subscribes to its events, stores the handle, and calls `ctx.notify()` to trigger a re-render. The terminal view subscribes to `Input::Event::OpenHandoffEnvironmentCreationModal` and dispatches this action.
 
-**Render** — add the modal overlay to the workspace's render output when `is_visible()` returns `true`, using the same overlay stacking pattern as existing workspace modals.
+**Render** — add the modal overlay to the workspace's render output when `handoff_environment_creation_modal.is_some()`, using the same overlay stacking pattern as `lightbox_view`.
 
 ### 4. Ghost text fallback
 

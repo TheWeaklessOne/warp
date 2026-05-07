@@ -35,30 +35,30 @@ Figma: none provided
 
 ### Successful environment creation
 
-11. When the user fills out the form and submits (Create button or Enter on the focused submit button), the form emits `UpdateEnvironmentFormEvent::Created`. The modal closes.
+11. When the user fills out the form and submits (Create button or Enter on the focused submit button), the modal closes immediately.
 
-12. The newly created environment is automatically selected in the handoff-compose state.
+12. The environment is created on the server via an online-only API call (`create_ambient_agent_environment_online`). The modal waits for the server to confirm creation and return a `ServerId` before proceeding — this avoids race conditions with unsynced client IDs.
 
-13. If the user had a non-empty prompt in the input buffer when the modal opened, the handoff auto-submits immediately: the prompt and any pending attachments are sent to `WorkspaceAction::OpenLocalToCloudHandoffPane` with the new environment, following the same path as a normal `& query` submit. If the prompt was empty, `&` compose mode remains active with the new environment selected so the user can type a prompt.
+13. Once the server confirms, the handoff auto-submits: the prompt and any pending attachments are sent to `WorkspaceAction::OpenLocalToCloudHandoffPane` with the new environment's `ServerId`, following the same path as a normal `& query` submit.
+
+### Failure during server creation
+
+14. If the server call fails (network error, validation failure, etc.), the error is logged and an error toast is shown ("Failed to create environment: \<error\>"). The `&` compose input is preserved so the user can retry.
 
 ### Dismissal without creating
 
-14. If the user closes the modal without creating an environment (Escape, clicking outside, or the close button), the input returns to `&` handoff-compose mode unchanged — the prompt text, attachments, and chip state are all preserved exactly as they were before the modal opened.
+15. If the user closes the modal without creating an environment (Escape, clicking outside, or the close button), the input returns to `&` handoff-compose mode unchanged — the prompt text, attachments, and chip state are all preserved exactly as they were before the modal opened.
 
-15. The user can re-trigger the modal by pressing Enter again, or exit `&` mode entirely via Backspace-on-empty / Escape as usual.
+16. The user can re-trigger the modal by pressing Enter again, or exit `&` mode entirely via Backspace-on-empty / Escape as usual.
 
 ### Interaction with existing environment flows
 
-16. If the user already has one or more environments, Enter in `&` compose mode submits the handoff as it does today — the modal never opens when environments exist.
+17. If the user already has one or more environments, Enter in `&` compose mode submits the handoff as it does today — the modal never opens when environments exist.
 
-17. If the user creates their first environment through Settings → Environments while `&` compose mode is active, the environment chip should update reactively (via the existing `CloudModel` subscription) to show the new environment name. At that point, Enter submits the handoff normally without opening the modal.
+18. If the user creates their first environment through Settings → Environments while `&` compose mode is active, the environment chip should update reactively (via the existing `CloudModel` subscription) to show the new environment name. At that point, Enter submits the handoff normally without opening the modal.
 
-18. The modal does not interfere with the "share with team" checkbox — it renders the same as in the settings page create flow. If the user is on a team, the option appears.
+19. The modal does not interfere with the "share with team" checkbox — it renders the same as in the settings page create flow. If the user is on a team, the option appears.
 
 ### Edge cases
 
-19. If the environment creation request fails server-side (network error, validation failure), the form stays open with the error displayed inline (same as the settings page behavior). The modal does not close on failure.
-
-20. If the user opens the modal, creates an environment, and the `CloudModel` subscription fires before the modal's `Created` event is processed, the handoff should still use the environment from the `Created` event (not race with a different default selection).
-
-21. If the user is not logged in or not authenticated, the form's GitHub auth flow (repo selection) works the same as in settings — the OAuth redirect opens in the browser and the form refreshes on app focus.
+20. If the user is not logged in or not authenticated, the form's GitHub auth flow (repo selection) works the same as in settings — the OAuth redirect opens in the browser and the form refreshes on app focus.
